@@ -6,6 +6,18 @@
 # les combine horizontalement, et les diffuse vers un serveur RTMP.
 ##################################################
 
+# Fonction de nettoyage pour Control-C
+cleanup() {
+    echo -e "\n\nArrêt du stream..."
+    kill $FFMPEG_PID 2>/dev/null || true
+    kill $READER_PID 2>/dev/null || true
+    rm -f "$FIFO"
+    exit 0
+}
+
+# Capturer Control-C (SIGINT) et SIGTERM
+trap cleanup SIGINT SIGTERM
+
 SCALE="1920:-2" # Redimensionner à une largeur de 1920px, en ajustant la hauteur pour conserver les proportions
 # Récupérer l'URL du stream depuis une variable d'environnement STREAM_URL (ou RTMP_URL)
 STREAM_URL="${STREAM_URL}"
