@@ -11,6 +11,7 @@ cleanup() {
     echo -e "\n\nArrêt du stream..."
     kill $FFMPEG_PID 2>/dev/null || true
     kill $READER_PID 2>/dev/null || true
+    kill $MONITOR_PID 2>/dev/null || true
     rm -f "$FIFO"
     exit 0
 }
@@ -37,6 +38,7 @@ if [ -z "$DEVICES" ]; then
 fi
 
 echo "Indices des écrans trouvés : $DEVICES"
+INITIAL_DEVICES="$DEVICES"
 
 # 2. Construire dynamiquement la commande FFmpeg
 # Nous devons construire les arguments d'entrée (-i ...) et les arguments de filtre (hstack) 
@@ -105,9 +107,35 @@ ffmpeg \
     -progress "$FIFO" -nostats -hide_banner -loglevel error 2>/dev/null &
 FFMPEG_PID=$!
 
+# Démarrer le monitoring des changements d'écrans
+(
+    while true; do
+        sleep 3
+        NEW_DEVICES=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep "Capture screen" | awk -F'[][]' '{print $4}')
+        if [ "$NEW_DEVICES" != "$INITIAL_DEVICES" ]; then
+            echo -e "\n\nChangement d'écrans détecté : redémarrage du script..."
+            # Tuer ffmpeg et le lecteur
+            kill $FFMPEG_PID 2>/dev/null || true
+            kill $READER_PID 2>/dev/null || true
+            # Sortir de la boucle et terminer le subprocess
+            exit 0
+        fi
+    done
+) &
+MONITOR_PID=$!
+
 # Attendre que ffmpeg se termine, puis nettoyer le lecteur et le FIFO
 wait $FFMPEG_PID
 EXIT_CODE=$?
 kill $READER_PID 2>/dev/null || true
+kill $MONITOR_PID 2>/dev/null || true
 rm -f "$FIFO"
+
+# Si ffmpeg s'est terminé avec une erreur ou a été tué, et que les écrans ont changé, redémarrer
+NEW_DEVICES=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep "Capture screen" | awk -F'[][]' '{print $4}')
+if [ "$NEW_DEVICES" != "$INITIAL_DEVICES" ]; then
+    echo "Redémarrage avec la nouvelle configuration d'écrans..."
+    exec "$0" "$@"
+fi
+
 exit $EXIT_CODE
