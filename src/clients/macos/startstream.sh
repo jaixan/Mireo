@@ -1,43 +1,80 @@
 #!/bin/bash
 
-##################################################
-# Capture d'écran multiple sur macOS et les diffuser via FFmpeg
-# Ce script détecte tous les écrans disponibles, les capture,
-# les combine horizontalement, et les diffuse vers un serveur RTMP.
-##################################################
+# Couleurs pour l'affichage
+RESET="\033[0m"
+BOLD="\033[1m"
+CYAN="\033[36m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+BLUE="\033[34m"
+
+# Fonction splash screen
+show_splash() {
+    clear
+    echo -e "${CYAN}${BOLD}"
+    echo "  ███╗   ███╗██╗██╗   ██╗███████╗ ██████╗ "
+    echo "  ████╗ ████║██║██║   ██║██╔════╝██╔═══██╗"
+    echo "  ██╔████╔██║██║██║   ██║█████╗  ██║   ██║"
+    echo "  ██║╚██╔╝██║██║╚██╗ ██╔╝██╔══╝  ██║   ██║"
+    echo "  ██║ ╚═╝ ██║██║ ╚████╔╝ ███████╗╚██████╔╝"
+    echo "  ╚═╝     ╚═╝╚═╝  ╚═══╝  ╚══════╝ ╚═════╝ "
+    echo -e "${RESET}"
+    echo -e "${BLUE}  Système de surveillance multi-écrans${RESET}"
+    echo -e "${BLUE}  ────────────────────────────────────${RESET}"
+    echo ""
+}
 
 # Fonction de nettoyage pour Control-C
 cleanup() {
-    echo -e "\n\nArrêt du stream..."
+    echo -e "\n${YELLOW}┌─────────────────────────────────┐${RESET}"
+    echo -e "${YELLOW}│${RESET}  Arrêt du stream en cours...    ${YELLOW}│${RESET}"
+    echo -e "${YELLOW}└─────────────────────────────────┘${RESET}"
     kill $FFMPEG_PID 2>/dev/null || true
     kill $READER_PID 2>/dev/null || true
     kill $MONITOR_PID 2>/dev/null || true
     rm -f "$FIFO"
+    echo -e "${GREEN}✓ Stream arrêté avec succès${RESET}"
     exit 0
 }
 
 # Capturer Control-C (SIGINT) et SIGTERM
 trap cleanup SIGINT SIGTERM
 
-SCALE="1920:-2" # Redimensionner à une largeur de 1920px, en ajustant la hauteur pour conserver les proportions
-# Récupérer l'URL du stream depuis une variable d'environnement STREAM_URL (ou RTMP_URL)
+# Afficher le splash screen
+show_splash
+
+# Configuration
+SCALE="1920:-2"
 STREAM_URL="${STREAM_URL}"
+
 if [ -z "$STREAM_URL" ]; then
-    echo "Erreur: veuillez définir la variable d'environnement STREAM_URL (ex: rtmp://server/app/cle)"
+    echo -e "${RED}✗ Erreur:${RESET} Variable d'environnement STREAM_URL non définie"
+    echo -e "${YELLOW}  Exemple:${RESET} export STREAM_URL='rtmp://server/app/cle'"
     exit 1
 fi
 
-# 1. Detecter les index des écrans
-# Nous capturons la sortie, cherchons "Capture screen", et extrayons les numéros d'index.
-# Exemple de ligne: [AVFoundation input device @ 0x7fae5bc0c600] [1] Capture screen 0
+echo -e "${GREEN}✓ Configuration chargée${RESET}"
+echo -e "  ${CYAN}URL:${RESET} $STREAM_URL"
+
+# Détection des écrans
+echo -e "\n${CYAN}┌─────────────────────────────────┐${RESET}"
+echo -e "${CYAN}│${RESET}  Détection des écrans...        ${CYAN}│${RESET}"
+echo -e "${CYAN}└─────────────────────────────────┘${RESET}"
+
 DEVICES=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep "Capture screen" | awk -F'[][]' '{print $4}')
 
 if [ -z "$DEVICES" ]; then
-    echo "Aucun périphérique de capture d'écran trouvé."
+    echo -e "${RED}✗ Aucun périphérique de capture d'écran trouvé${RESET}"
     exit 1
 fi
 
-echo "Indices des écrans trouvés : $DEVICES"
+SCREEN_COUNT=$(echo "$DEVICES" | wc -w | xargs)
+echo -e "${GREEN}✓ ${SCREEN_COUNT} écran(s) détecté(s)${RESET}"
+for DEVICE in $DEVICES; do
+    echo -e "  ${BLUE}•${RESET} Écran $DEVICE"
+done
+
 INITIAL_DEVICES="$DEVICES"
 
 # 2. Construire dynamiquement la commande FFmpeg
@@ -74,9 +111,14 @@ else
     MAP_ARG="" 
 fi
 
-echo "Démarrage du flux combiné avec $COUNT écrans..."
-
-# 4. Exécuter FFmpeg
+# Démarrage du stream
+echo -e "\n${CYAN}┌─────────────────────────────────┐${RESET}"
+echo -e "${CYAN}│${RESET}  Démarrage du stream...         ${CYAN}│${RESET}"
+echo -e "${CYAN}└─────────────────────────────────┘${RESET}"
+echo -e "${GREEN}✓ Configuration:${RESET} $COUNT écran(s)"
+echo -e "${GREEN}✓ Résolution:${RESET} $SCALE"
+echo -e "${GREEN}✓ Codec:${RESET} H.264 (ultrafast)"
+echo ""
 
 # Créer un FIFO pour la progression de ffmpeg et démarrer un lecteur avant de lancer ffmpeg
 FIFO="$(mktemp -u)"
@@ -86,7 +128,10 @@ mkfifo "$FIFO"
 (
     while IFS='=' read -r key val; do
         case "$key" in
-            frame) printf "\rFrames envoyées : %s" "$val" ;;
+            frame) 
+                val=$(echo "$val" | xargs)
+                printf "\r${BLUE}⬤${RESET} Streaming en cours... ${GREEN}%s${RESET} frames" "$val" 
+                ;;
             progress) [ "$val" = "end" ] && { echo; break; } ;;
         esac
     done <"$FIFO"
@@ -113,7 +158,8 @@ FFMPEG_PID=$!
         sleep 3
         NEW_DEVICES=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep "Capture screen" | awk -F'[][]' '{print $4}')
         if [ "$NEW_DEVICES" != "$INITIAL_DEVICES" ]; then
-            echo -e "\n\nChangement d'écrans détecté : redémarrage du script..."
+            echo -e "\n\n${YELLOW}⚠ Changement d'écrans détecté${RESET}"
+            echo -e "${CYAN}↻ Redémarrage du stream...${RESET}"
             # Tuer ffmpeg et le lecteur
             kill $FFMPEG_PID 2>/dev/null || true
             kill $READER_PID 2>/dev/null || true
@@ -134,8 +180,10 @@ rm -f "$FIFO"
 # Si ffmpeg s'est terminé avec une erreur ou a été tué, et que les écrans ont changé, redémarrer
 NEW_DEVICES=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep "Capture screen" | awk -F'[][]' '{print $4}')
 if [ "$NEW_DEVICES" != "$INITIAL_DEVICES" ]; then
-    echo "Redémarrage avec la nouvelle configuration d'écrans..."
+    echo -e "\n${CYAN}↻ Redémarrage avec la nouvelle configuration...${RESET}\n"
+    sleep 1
     exec "$0" "$@"
 fi
 
+echo -e "\n${GREEN}✓ Stream terminé${RESET}"
 exit $EXIT_CODE
